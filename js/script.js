@@ -1,40 +1,3 @@
-/* ============ IMPORTACIONES DE FIREBASE ============ */
-import { initializeApp } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js";
-import {
-  getAuth,
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-  updateProfile,
-} from "https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js";
-import {
-  getFirestore,
-  collection,
-  addDoc,
-  getDocs,
-  query,
-  where,
-  serverTimestamp,
-} from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
-
-/* ============ CONFIGURACIÓN DE FIREBASE ============ */
-const firebaseConfig = {
-  apiKey: "AIzaSyDHa8h3qb_8NzzJpPBxL5Sao5I9c8Ap7ms",
-  authDomain: "alltech-be009.firebaseapp.com",
-  databaseURL: "https://alltech-be009-default-rtdb.firebaseio.com",
-  projectId: "alltech-be009",
-  storageBucket: "alltech-be009.firebasestorage.app",
-  messagingSenderId: "158062798866",
-  appId: "1:158062798866:web:a137d69c21e86751f990cb",
-  measurementId: "G-RS5SQ2RLB8",
-};
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-
-/* ============ PRODUCTOS (Tu arreglo original) ============ */
 const productos = [
   {
     id: 11,
@@ -886,16 +849,18 @@ const productos = [
     tag: "oferta",
   },
 ];
-// NOTA: En tu código real, asegúrate de que el arreglo 'productos' esté completo aquí.
 
 /* ============ ESTADO ============ */
 let carrito = JSON.parse(localStorage.getItem("tp_cart") || "[]");
 let favoritos = JSON.parse(localStorage.getItem("tp_favs") || "[]");
-let user = null; // Ahora Firebase maneja al usuario
+let users = JSON.parse(localStorage.getItem("tp_users") || "[]");
+let user = JSON.parse(localStorage.getItem("tp_user") || "null");
 let busqueda = "";
 let filtroCat = "todos";
 let envioSeleccionado = "express";
-let userDiscounts = []; // Se llenará desde Firebase
+
+// NUEVO: Arreglo de correos que ya obtuvieron el descuento
+let userDiscounts = JSON.parse(localStorage.getItem("tp_discounts") || "[]");
 
 const ENVIO_COSTO = 25;
 const ENVIO_GRATIS_MIN = 220;
@@ -1174,6 +1139,7 @@ function mostrarVistaCheckout() {
   checkoutForm.style.display = "block";
   drawerFoot.style.display = "none";
   drawerTitle.textContent = "Finalizar compra";
+  // Prellenar datos si hay usuario logueado
   if (user) {
     document.getElementById("ckNombre").value = user.name || "";
   }
@@ -1194,12 +1160,15 @@ overlay.addEventListener("click", cerrarCarrito);
 function calcularTotales() {
   const subtotal = carrito.reduce((s, i) => s + i.precio * i.qty, 0);
 
+  // Calcular descuento del 10% si el usuario lo ha reclamado
   let descuento = 0;
   if (user && userDiscounts.includes(user.email)) {
     descuento = subtotal * 0.1;
   }
 
   const subtotalConDescuento = subtotal - descuento;
+
+  // El envío gratis se calcula sobre el subtotal CON descuento
   let envio = subtotalConDescuento >= ENVIO_GRATIS_MIN ? 0 : ENVIO_COSTO;
 
   return { subtotal, descuento, envio, total: subtotalConDescuento + envio };
@@ -1210,6 +1179,7 @@ function actualizarResumenCheckout() {
 
   document.getElementById("ckSubtotal").textContent = fmt(subtotal);
 
+  // Mostrar/ocultar fila de descuento
   const discRow = document.getElementById("ckDescuentoRow");
   if (discRow) {
     if (descuento > 0) {
@@ -1249,7 +1219,7 @@ document.getElementById("pagoTarjeta").addEventListener("change", (e) => {
     : "none";
 });
 
-document.getElementById("ckConfirm").addEventListener("click", async () => {
+document.getElementById("ckConfirm").addEventListener("click", () => {
   const nombre = document.getElementById("ckNombre").value.trim();
   const direccion = document.getElementById("ckDireccion").value.trim();
   const nit = document.getElementById("ckNit").value.trim();
@@ -1273,34 +1243,25 @@ document.getElementById("ckConfirm").addEventListener("click", async () => {
     pago === "tarjeta" ? `Tarjeta (${tarjeta})` : "Contra entrega (efectivo)";
   const envioTexto =
     envioSeleccionado === "express" ? "Express (mismo día)" : "Forza (24-48h)";
+
+  // Generar número de pedido
   const pedidoId = "AT-" + Date.now().toString().slice(-6);
 
-  // --- GUARDAR EN FIREBASE FIRESTORE ---
-  try {
-    await addDoc(collection(db, "orders"), {
-      pedidoId: pedidoId,
-      fecha: serverTimestamp(),
-      cliente: {
-        nombre,
-        direccion,
-        nit,
-        telefono,
-        email: user ? user.email : "Invitado",
-      },
-      pago: pagoTexto,
-      envio: envioTexto,
-      items: [...carrito],
-      subtotal,
-      descuento,
-      costoEnvio: envio,
-      total,
-    });
-    console.log("Pedido guardado en Firestore exitosamente.");
-  } catch (e) {
-    console.error("Error al guardar el pedido: ", e);
-    mostrarToast("Hubo un error al procesar el pedido en la nube.");
-  }
-  // -------------------------------------
+  // Guardar pedido en historial
+  const pedidos = JSON.parse(localStorage.getItem("tp_orders") || "[]");
+  pedidos.push({
+    id: pedidoId,
+    fecha: new Date().toISOString(),
+    cliente: { nombre, direccion, nit, telefono },
+    pago: pagoTexto,
+    envio: envioTexto,
+    items: [...carrito],
+    subtotal,
+    descuento: descuento,
+    costoEnvio: envio,
+    total,
+  });
+  localStorage.setItem("tp_orders", JSON.stringify(pedidos));
 
   // Mensaje WhatsApp
   let msg = `¡Hola AllTech! 👋 Quiero confirmar mi pedido *${pedidoId}*:%0A%0A`;
@@ -1324,6 +1285,7 @@ document.getElementById("ckConfirm").addEventListener("click", async () => {
 
   window.open(`https://wa.me/50247123613?text=${msg}`, "_blank");
 
+  // Limpiar carrito
   carrito = [];
   guardarCarrito();
   renderCarrito();
@@ -1331,7 +1293,7 @@ document.getElementById("ckConfirm").addEventListener("click", async () => {
   mostrarToast(`Pedido ${pedidoId} enviado ✅`);
 });
 
-/* ============ CUENTA (LOGIN / REGISTRO CON FIREBASE) ============ */
+/* ============ CUENTA (LOGIN / REGISTRO) ============ */
 const accountModal = document.getElementById("accountModal");
 const accountBtn = document.getElementById("accountBtn");
 const closeAccount = document.getElementById("closeAccount");
@@ -1363,6 +1325,7 @@ function actualizarVistaCuenta() {
     accountForms.style.display = "block";
     label.textContent = "Mi Cuenta";
   }
+  // NUEVO: Actualizar el banner de descuento al cambiar de cuenta
   renderDiscountSection();
 }
 
@@ -1385,100 +1348,50 @@ document.querySelectorAll(".acc-tab").forEach((tab) => {
   });
 });
 
-// --- LOGIN CON FIREBASE ---
-document.getElementById("loginForm").addEventListener("submit", async (e) => {
+document.getElementById("loginForm").addEventListener("submit", (e) => {
   e.preventDefault();
   const email = document
     .getElementById("loginEmail")
     .value.trim()
     .toLowerCase();
   const pass = document.getElementById("loginPass").value;
-
-  try {
-    await signInWithEmailAndPassword(auth, email, pass);
-    mostrarToast("Sesión iniciada correctamente");
-    e.target.reset();
-    cerrarModalCuenta();
-  } catch (error) {
-    console.error(error);
+  const found = users.find((u) => u.email === email && u.pass === pass);
+  if (!found) {
     mostrarToast("Correo o contraseña incorrectos");
+    return;
   }
-});
-
-// --- REGISTRO CON FIREBASE ---
-document
-  .getElementById("registerForm")
-  .addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const name = document.getElementById("regName").value.trim();
-    const email = document
-      .getElementById("regEmail")
-      .value.trim()
-      .toLowerCase();
-    const pass = document.getElementById("regPass").value;
-
-    try {
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        email,
-        pass,
-      );
-      // Guardar el nombre en el perfil de Firebase
-      await updateProfile(userCredential.user, { displayName: name });
-      mostrarToast(`Cuenta creada. ¡Bienvenido, ${name}!`);
-      e.target.reset();
-      cerrarModalCuenta();
-    } catch (error) {
-      console.error(error);
-      if (error.code === "auth/email-already-in-use") {
-        mostrarToast("Ese correo ya está registrado");
-      } else {
-        mostrarToast("Error al crear cuenta: " + error.message);
-      }
-    }
-  });
-
-// --- LOGOUT CON FIREBASE ---
-document.getElementById("logoutBtn").addEventListener("click", async () => {
-  try {
-    await signOut(auth);
-    mostrarToast("Sesión cerrada");
-    cerrarModalCuenta();
-  } catch (error) {
-    console.error(error);
-  }
-});
-
-// --- OBSERVADOR DE SESIÓN (Mantiene al usuario logueado al recargar) ---
-onAuthStateChanged(auth, async (firebaseUser) => {
-  if (firebaseUser) {
-    user = {
-      name: firebaseUser.displayName || firebaseUser.email.split("@")[0],
-      email: firebaseUser.email,
-      uid: firebaseUser.uid,
-    };
-    // Consultar si el usuario ya tiene el descuento en Firestore
-    await checkUserDiscount(firebaseUser.email);
-  } else {
-    user = null;
-    userDiscounts = [];
-  }
+  user = { name: found.name, email: found.email };
+  localStorage.setItem("tp_user", JSON.stringify(user));
   actualizarVistaCuenta();
+  mostrarToast(`¡Bienvenido, ${found.name}!`);
+  e.target.reset();
 });
 
-// Función para verificar si el usuario ya dejó comentario en Firestore
-async function checkUserDiscount(email) {
-  try {
-    const q = query(collection(db, "comments"), where("email", "==", email));
-    const querySnapshot = await getDocs(q);
-    userDiscounts = [];
-    querySnapshot.forEach((doc) => {
-      userDiscounts.push(doc.data().email);
-    });
-  } catch (e) {
-    console.error("Error al verificar descuento:", e);
+document.getElementById("registerForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const name = document.getElementById("regName").value.trim();
+  const email = document.getElementById("regEmail").value.trim().toLowerCase();
+  const pass = document.getElementById("regPass").value;
+  if (users.find((u) => u.email === email)) {
+    mostrarToast("Ese correo ya está registrado");
+    return;
   }
-}
+  users.push({ name, email, pass });
+  localStorage.setItem("tp_users", JSON.stringify(users));
+  user = { name, email };
+  localStorage.setItem("tp_user", JSON.stringify(user));
+  actualizarVistaCuenta();
+  mostrarToast(`Cuenta creada. ¡Bienvenido, ${name}!`);
+  e.target.reset();
+});
+
+document.getElementById("logoutBtn").addEventListener("click", () => {
+  user = null;
+  localStorage.removeItem("tp_user");
+  actualizarVistaCuenta();
+  mostrarToast("Sesión cerrada");
+  cerrarModalCuenta();
+});
 
 /* ============ FAVORITOS DRAWER ============ */
 document.getElementById("favBtn").addEventListener("click", () => {
@@ -1550,13 +1463,14 @@ function mostrarToast(txt) {
   toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
 }
 
-/* ============ SISTEMA DE DESCUENTO (COMENTARIO EN FIRESTORE) ============ */
+/* ============ SISTEMA DE DESCUENTO (COMENTARIO) ============ */
 function renderDiscountSection() {
   const container = document.getElementById("discountActionContainer");
   const banner = document.getElementById("studentBanner");
 
   if (!container || !banner) return;
 
+  // 1. Si no ha iniciado sesión
   if (!user) {
     banner.classList.remove("claimed");
     container.innerHTML = `
@@ -1566,6 +1480,7 @@ function renderDiscountSection() {
     return;
   }
 
+  // 2. Si ya obtuvo el descuento
   const hasDiscount = userDiscounts.includes(user.email);
   if (hasDiscount) {
     banner.classList.add("claimed");
@@ -1576,6 +1491,7 @@ function renderDiscountSection() {
     return;
   }
 
+  // 3. Si está logueado pero no ha dejado comentario
   banner.classList.remove("claimed");
   container.innerHTML = `
     <div class="comment-box">
@@ -1584,35 +1500,33 @@ function renderDiscountSection() {
     </div>
   `;
 
-  document
-    .getElementById("submitCommentBtn")
-    .addEventListener("click", async () => {
-      const comment = document.getElementById("userComment").value.trim();
-      if (comment.length < 5) {
-        mostrarToast(
-          "Por favor, escribe un comentario válido (mín. 5 caracteres).",
-        );
-        return;
-      }
+  document.getElementById("submitCommentBtn").addEventListener("click", () => {
+    const comment = document.getElementById("userComment").value.trim();
+    if (comment.length < 5) {
+      mostrarToast(
+        "Por favor, escribe un comentario válido (mín. 5 caracteres).",
+      );
+      return;
+    }
 
-      // --- GUARDAR COMENTARIO EN FIRESTORE ---
-      try {
-        await addDoc(collection(db, "comments"), {
-          email: user.email,
-          name: user.name,
-          text: comment,
-          date: serverTimestamp(),
-        });
+    // Guardar el descuento para este usuario
+    userDiscounts.push(user.email);
+    localStorage.setItem("tp_discounts", JSON.stringify(userDiscounts));
 
-        userDiscounts.push(user.email); // Actualizar estado local
-        mostrarToast("¡Gracias por tu opinión! Descuento del 10% activado 🎉");
-        renderDiscountSection();
-        actualizarResumenCheckout();
-      } catch (e) {
-        console.error("Error al guardar comentario: ", e);
-        mostrarToast("Hubo un error al guardar tu opinión.");
-      }
+    // Guardar el comentario en el sistema (para que el admin lo lea)
+    const comments = JSON.parse(localStorage.getItem("tp_comments") || "[]");
+    comments.push({
+      email: user.email,
+      name: user.name,
+      text: comment,
+      date: new Date().toISOString(),
     });
+    localStorage.setItem("tp_comments", JSON.stringify(comments));
+
+    mostrarToast("¡Gracias por tu opinión! Descuento del 10% activado 🎉");
+    renderDiscountSection();
+    actualizarResumenCheckout(); // Recalcular el carrito si está abierto
+  });
 }
 
 /* ============ INIT ============ */
@@ -1621,9 +1535,10 @@ renderCarrito();
 guardarCarrito();
 renderFavoritos();
 actualizarContadorFav();
-renderDiscountSection();
+actualizarVistaCuenta();
+renderDiscountSection(); // <--- Inicializar el sistema de descuento
 
-/* ============ ANIMACIONES ============ */
+/* ============ ANIMACIONES (scroll reveal + micro-interacciones) ============ */
 document.documentElement.classList.add("js");
 
 const revealEls = document.querySelectorAll(
@@ -1641,10 +1556,14 @@ if ("IntersectionObserver" in window) {
         }
       });
     },
-    { threshold: 0, rootMargin: "0px 0px -40px 0px" },
+    {
+      threshold: 0, // ← FIX PRINCIPAL
+      rootMargin: "0px 0px -40px 0px", // ← suaviza cuándo entra
+    },
   );
   revealEls.forEach((el) => io.observe(el));
 
+  // Red de seguridad: si algo falla, mostrar todo a los 1.5s
   setTimeout(() => {
     revealEls.forEach((el) => {
       if (!el.classList.contains("in-view")) el.classList.add("in-view");
@@ -1654,16 +1573,18 @@ if ("IntersectionObserver" in window) {
   revealEls.forEach((el) => el.classList.add("in-view"));
 }
 
+// Re-animar cards cuando se re-renderiza el catálogo
 const _renderProductosOriginal = renderProductos;
 renderProductos = function () {
   _renderProductosOriginal();
   grid.querySelectorAll(".card").forEach((c) => {
     c.style.animation = "none";
-    void c.offsetWidth;
+    void c.offsetWidth; // forzar reflow
     c.style.animation = "";
   });
 };
 
+// Bump del badge del carrito
 const _guardarCarritoOriginal = guardarCarrito;
 guardarCarrito = function () {
   _guardarCarritoOriginal();
@@ -1676,6 +1597,7 @@ guardarCarrito = function () {
   }
 };
 
+// Bump del badge de favoritos
 const _actualizarContadorFavOriginal = actualizarContadorFav;
 actualizarContadorFav = function () {
   _actualizarContadorFavOriginal();
@@ -1688,9 +1610,12 @@ actualizarContadorFav = function () {
   }
 };
 
+/* ============ LÓGICA DE RECURSOS GRATIS ============ */
 document.querySelectorAll(".btn-res-download").forEach((btn) => {
   btn.addEventListener("click", (e) => {
     const resourceName = e.target.dataset.resource;
+
+    // Simulamos la petición del correo
     const email = prompt(
       `Para descargar "${resourceName}", ingresá tu correo electrónico:`,
     );
@@ -1698,6 +1623,8 @@ document.querySelectorAll(".btn-res-download").forEach((btn) => {
     if (email) {
       if (email.includes("@") && email.includes(".")) {
         mostrarToast(`¡Listo! Enviamos "${resourceName}" a ${email} 📩`);
+        // Aquí podrías agregar lógica para guardar el correo en localStorage
+        // y simular la descarga (ej: window.open('link_al_archivo.pdf'))
       } else {
         mostrarToast("Por favor, ingresá un correo válido.");
       }
